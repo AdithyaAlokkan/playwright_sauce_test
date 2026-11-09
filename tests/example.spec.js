@@ -1,19 +1,27 @@
-// @ts-check
-import { test, expect } from '@playwright/test';
+import { test, expect } from '@playwright/test'
 
-test('has title', async ({ page }) => {
-  await page.goto('https://playwright.dev/');
+test('test', async ({ page }) => {
+  await page.goto('https://nologin.in/')
+  await page.getByRole('textbox', { name: 'Enter page name' }).click()
+  await page
+    .getByRole('textbox', { name: 'Enter page name' })
+    .fill('playwrighttest')
+  await page.getByRole('textbox', { name: 'Enter page name' }).press('Enter')
+  await page
+    .getByRole('textbox', { name: 'Enter text and hit save button' })
+    .click({
+      clickCount: 3,
+    })
+  const currentTime = new Date().toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+  await page
+    .getByRole('textbox', { name: 'Enter text and hit save button' })
+    .fill(`test executed at ${currentTime}`)
+  await page.getByRole('button', { name: 'Save' }).click()
+  await page.getByRole('button', { name: 'close' }).click()
+})
 
-  // Expect a title "to contain" a substring.
-  await expect(page).toHaveTitle(/Playwright/);
-});
-
-test('get started link', async ({ page }) => {
-  await page.goto('https://playwright.dev/');
-
-  // Click the get started link.
-  await page.getByRole('link', { name: 'Get started' }).click();
-
-  // Expects page to have a heading with the name of Installation.
-  await expect(page.getByRole('heading', { name: 'Installation' })).toBeVisible();
-});
