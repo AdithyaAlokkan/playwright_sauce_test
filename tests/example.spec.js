@@ -10,7 +10,7 @@ test('Scheduled execution test', async ({ page }) => {
 
   await expect(page).toHaveTitle('Example Domain')
 
-  sendEmail(
+  await sendEmail(
     'Playwright Test',
     'Your automated test has completed successfully!',
   )
