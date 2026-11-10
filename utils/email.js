@@ -20,6 +20,8 @@ async function sendEmail(subject, message) {
     })
 
     console.log('Verifying SMTP connection...')
+    console.log('Email configured:', !!process.env.EMAIL_USER)
+    console.log('Password configured:', !!process.env.EMAIL_PASSWORD)
 
     await transporter.verify()
 
