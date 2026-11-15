@@ -1,9 +1,11 @@
-const { test } = require('@playwright/test')
+const { expect, test } = require('@playwright/test')
 const getBookings = require('../utils/getBookings')
 const updateBookingStatus = require('../utils/updateBookingStatus')
+const openBookingSignIn = require('../utils/bookingSession')
 const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
+const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
 
 function getDohaDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -103,8 +105,13 @@ async function selectBookingDate(page, dateValue) {
         month: 'long',
       })
       const dayLink = calendar.locator(`a[title="${monthName} ${day}"]`)
+      const dayLinkCount = await dayLink.count()
 
-      if ((await dayLink.count()) !== 1) {
+      if (dayLinkCount === 0) {
+        return false
+      }
+
+      if (dayLinkCount !== 1) {
         throw new Error(`Date ${monthName} ${day}, ${year} is not selectable`)
       }
 
@@ -121,7 +128,7 @@ async function selectBookingDate(page, dateValue) {
         )
       }
 
-      return
+      return true
     }
 
     const direction = monthOffset > 0 ? 'next' : 'previous'
@@ -129,7 +136,13 @@ async function selectBookingDate(page, dateValue) {
       `a[title="Go to the ${direction} month"]`,
     )
 
-    if ((await monthLink.count()) !== 1) {
+    const monthLinkCount = await monthLink.count()
+
+    if (monthLinkCount === 0 && direction === 'next') {
+      return false
+    }
+
+    if (monthLinkCount !== 1) {
       throw new Error(
         `Cannot navigate the calendar to ${formatBookingDate(dateValue)}`,
       )
@@ -181,46 +194,54 @@ function getBookingStart(dateValue, timeValue) {
   return bookingStart
 }
 
-test('Submit pending future bookings', async ({ page }) => {
+test('Submit pending and failed future bookings', async ({ page }) => {
   const bookings = await getBookings()
-  const pendingBookings = bookings.filter(
-    (booking) => booking.Status === 'Pending',
+  const bookingsToProcess = bookings.filter(
+    (booking) => ['Pending', 'Failed'].includes(booking.Status),
   )
   const now = getCurrentDohaTime()
 
-  test.skip(pendingBookings.length === 0, 'No Pending bookings to process')
-  test.setTimeout(Math.max(30_000, pendingBookings.length * 60_000))
+  test.skip(
+    bookingsToProcess.length === 0,
+    'No Pending or Failed bookings to process',
+  )
+  test.setTimeout(Math.max(30_000, bookingsToProcess.length * 60_000))
 
-  const userId = process.env.PDCB_USER_ID
-  const password = process.env.PDCB_PASSWORD
+  let signedInUserName
 
-  if (!userId || !password) {
-    throw new Error(
-      'Set PDCB_USER_ID and PDCB_PASSWORD before running this test',
-    )
-  }
-
-  let isSignedIn = false
-
-  for (const booking of pendingBookings) {
+  for (const booking of bookingsToProcess) {
     try {
-      if (getBookingStart(booking.Date, booking.Time) < now) {
+      if (getBookingStart(booking.Date, booking.Time_Start) < now) {
         continue
       }
 
-      await page.goto('https://pdcb.waseef.qa/Home')
+      const userName = booking['User_Name']
+      const password = booking.Password
 
-      if (isSignedIn) {
-        await page.goto('https://pdcb.waseef.qa/ChooseLocation')
-      } else {
-        await page.getByRole('link', { name: /sign in/i }).click()
-        await page.locator('#txtQatarID').fill(userId)
-        await page.locator('#txtPassword').fill(password)
-        await page.getByRole('button', { name: /log\s*in/i }).click()
-        isSignedIn = true
+      if (
+        typeof userName !== 'string' ||
+        !userName.trim() ||
+        typeof password !== 'string' ||
+        !password
+      ) {
+        throw new Error(
+          `Booking ${booking.id} is missing its User Name or Password`,
+        )
       }
 
-      await page.getByText('madinatna', { exact: false }).click()
+      const normalizedUserName = userName.trim()
+      if (signedInUserName === normalizedUserName) {
+        await page.goto(CHOOSE_LOCATION_URL)
+      } else {
+        await openBookingSignIn(page)
+        await page.locator('#txtQatarID').fill(normalizedUserName)
+        await page.locator('#txtPassword').fill(password)
+        await page.getByRole('button', { name: /log\s*in/i }).click()
+        signedInUserName = normalizedUserName
+        await page.goto(CHOOSE_LOCATION_URL)
+      }
+
+      await page.getByRole('link', { name: /^Madinatna\b/i }).click()
 
       const sportPaths = {
         padel: 'MadinatnaPaddle.aspx',
@@ -232,16 +253,47 @@ test('Submit pending future bookings', async ({ page }) => {
       const sportPath = sportPaths[booking.Sport.trim().toLowerCase()]
       if (!sportPath) throw new Error(`Unsupported sport: ${booking.Sport}`)
 
-      await page.locator(`a[href$="${sportPath}"]`).click()
+      const sportLink = page.locator(`a[href$="${sportPath}"]`)
+      try {
+        await expect(sportLink).toBeVisible({ timeout: 10_000 })
+      } catch (error) {
+        throw new Error(
+          `Sport link ${sportPath} was not available after opening Madinatna; current page: ${page.url()}`,
+          { cause: error },
+        )
+      }
+      await sportLink.click()
 
       const clusterLinks = page.locator(
         'a[href*="MadinatnaBookings.aspx"]',
       )
+      const needsCourt =
+        booking.Cluster.trim().toLowerCase() === 'i' &&
+        ['paddle', 'padel'].includes(booking.Sport.trim().toLowerCase())
+      let expectedCourtNo
+
+      if (needsCourt) {
+        const courtMatch = String(booking.Court ?? '')
+          .trim()
+          .match(/^(?:court\s*)?(\d+)$/i)
+
+        if (!courtMatch) {
+          throw new Error(
+            `Invalid court for Paddle cluster I booking: ${booking.Court}`,
+          )
+        }
+
+        expectedCourtNo = courtMatch[1]
+      }
+
       const clusterHref = await clusterLinks.evaluateAll(
         (links, expected) => {
           const normalize = (value) => String(value ?? '').trim().toLowerCase()
           const expectedCluster = normalize(expected.cluster)
-          const expectedSport = normalize(expected.sport)
+          const expectedSport =
+            normalize(expected.sport) === 'padel'
+              ? 'paddle'
+              : normalize(expected.sport)
 
           return (
             links.find((link) => {
@@ -252,12 +304,18 @@ test('Submit pending future bookings', async ({ page }) => {
                 normalize(url.searchParams.get('Cluster')) ===
                   expectedCluster &&
                 (linkSport === expectedSport ||
-                  linkSports.includes(expectedSport))
+                  linkSports.includes(expectedSport)) &&
+                (!expected.courtNo ||
+                  url.searchParams.get('CourtNo') === expected.courtNo)
               )
             })?.getAttribute('href') ?? null
           )
         },
-        { cluster: booking.Cluster, sport: booking.Sport },
+        {
+          cluster: booking.Cluster,
+          sport: booking.Sport,
+          courtNo: expectedCourtNo,
+        },
       )
 
       if (!clusterHref) {
@@ -268,8 +326,20 @@ test('Submit pending future bookings', async ({ page }) => {
 
       await page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click()
 
-      await selectBookingDate(page, booking.Date)
-      await selectTimeSlot(page, booking.Time)
+      const dateSelected = await selectBookingDate(page, booking.Date)
+      if (!dateSelected) {
+        continue
+      }
+
+      const timeSlotsSelected = await selectTimeSlot(
+        page,
+        booking.Time_Start,
+        booking.Time_End,
+      )
+      if (!timeSlotsSelected) {
+        await updateBookingStatus(booking.id, 'Failed')
+        continue
+      }
 
       const [submitResponse] = await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
@@ -285,6 +355,9 @@ test('Submit pending future bookings', async ({ page }) => {
           }`,
         )
       }
+
+      await expect(page.locator('body.booking-detail-page')).toBeVisible()
+      await expect(page.locator('#lblBookingReference')).toHaveText(/\S+/)
     } catch (flowError) {
       try {
         await updateBookingStatus(booking.id, 'Failed')
@@ -299,6 +372,5 @@ test('Submit pending future bookings', async ({ page }) => {
     }
 
     await updateBookingStatus(booking.id, 'Complete')
-    await page.goto('https://pdcb.waseef.qa/Home')
   }
 })

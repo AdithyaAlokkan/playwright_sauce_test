@@ -5,7 +5,7 @@ async function updateBookingStatus(bookingId, status) {
     .from('Booking History')
     .update({ Status: status })
     .eq('id', bookingId)
-    .eq('Status', 'Pending')
+    .in('Status', ['Pending', 'Failed'])
     .select('id')
 
   if (error) {
@@ -16,7 +16,7 @@ async function updateBookingStatus(bookingId, status) {
 
   if (data.length !== 1) {
     throw new Error(
-      `Booking ${bookingId} was not updated to ${status}; it may no longer be Pending`,
+      `Booking ${bookingId} was not updated to ${status}; it may no longer be Pending or Failed`,
     )
   }
 }
