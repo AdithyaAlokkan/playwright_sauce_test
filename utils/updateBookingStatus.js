@@ -1,9 +1,23 @@
 const supabase = require('./supabaseClient')
 
-async function updateBookingStatus(bookingId, status) {
+async function updateBookingStatus(bookingId, status, errorMessage) {
+  const update = { Status: status, error_message: null }
+
+  if (status === 'Failed' || typeof errorMessage === 'string') {
+    if (typeof errorMessage !== 'string' || !errorMessage.trim()) {
+      throw new Error(`An error message is required to fail booking ${bookingId}`)
+    }
+
+    const normalizedMessage = errorMessage.replace(/\s+/g, ' ').trim()
+    update.error_message =
+      normalizedMessage.length > 250
+        ? `${normalizedMessage.slice(0, 247)}...`
+        : normalizedMessage
+  }
+
   const { data, error } = await supabase
     .from('Booking History')
-    .update({ Status: status })
+    .update(update)
     .eq('id', bookingId)
     .in('Status', ['Pending', 'Failed'])
     .select('id')

@@ -325,9 +325,13 @@ test('Submit pending and failed future bookings', async ({ page }) => {
       }
 
       await page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click()
-
       const dateSelected = await selectBookingDate(page, booking.Date)
       if (!dateSelected) {
+        await updateBookingStatus(
+          booking.id,
+          booking.Status,
+          'Booking date is not yet available. We’ll continue attempting to book until it opens.',
+        )
         continue
       }
 
@@ -337,7 +341,11 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         booking.Time_End,
       )
       if (!timeSlotsSelected) {
-        await updateBookingStatus(booking.id, 'Failed')
+        await updateBookingStatus(
+          booking.id,
+          'Failed',
+          'No available time slots for the requested date and time.',
+        )
         continue
       }
 
@@ -360,7 +368,11 @@ test('Submit pending and failed future bookings', async ({ page }) => {
       await expect(page.locator('#lblBookingReference')).toHaveText(/\S+/)
     } catch (flowError) {
       try {
-        await updateBookingStatus(booking.id, 'Failed')
+        await updateBookingStatus(
+          booking.id,
+          'Failed',
+          'Booking failed due to unknown reason.',
+        )
       } catch (statusError) {
         throw new AggregateError(
           [flowError, statusError],
