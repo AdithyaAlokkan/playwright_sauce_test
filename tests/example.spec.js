@@ -6,6 +6,8 @@ const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
 const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
+const WEEKLY_BOOKING_LIMIT_ERROR =
+  'Sorry. You can only book 4 hours of play in one week (Saturday to Friday)'
 
 function getDohaDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -362,6 +364,18 @@ test('Submit pending and failed future bookings', async ({ page }) => {
               : ' without a page response'
           }`,
         )
+      }
+
+      const submissionPageText = (
+        await page.locator('body').innerText()
+      ).replace(/\s+/g, ' ')
+      if (submissionPageText.includes(WEEKLY_BOOKING_LIMIT_ERROR)) {
+        await updateBookingStatus(
+          booking.id,
+          'Failed',
+          WEEKLY_BOOKING_LIMIT_ERROR,
+        )
+        continue
       }
 
       await expect(page.locator('body.booking-detail-page')).toBeVisible()
