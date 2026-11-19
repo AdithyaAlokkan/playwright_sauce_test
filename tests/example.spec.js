@@ -24,21 +24,7 @@ function getDohaDateParts(date) {
 
 function getCurrentDohaTime() {
   const now = new Date()
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: BOOKING_TIME_ZONE,
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    hourCycle: 'h23',
-  }).formatToParts(now)
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, Number(part.value)]),
-  )
+  const values = getDohaTimeParts(now)
 
   return Date.UTC(
     values.year,
@@ -49,6 +35,63 @@ function getCurrentDohaTime() {
     values.second,
     now.getUTCMilliseconds(),
   )
+}
+
+function getDohaTimeParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BOOKING_TIME_ZONE,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+
+  return Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  )
+}
+
+function getMillisecondsUntilDohaMidnight(date = new Date()) {
+  const now = getDohaTimeParts(date)
+  const nowAtMidnight = Date.UTC(
+    now.year,
+    now.month - 1,
+    now.day,
+    now.hour,
+    now.minute,
+    now.second,
+    date.getUTCMilliseconds(),
+  )
+  const nextMidnight = Date.UTC(
+    now.year,
+    now.month - 1,
+    now.day + 1,
+  )
+
+  return now.hour === 0 ? 0 : nextMidnight - nowAtMidnight
+}
+
+async function waitUntilDohaMidnight(page) {
+  let milliseconds = getMillisecondsUntilDohaMidnight()
+
+  if (milliseconds <= 0) {
+    return
+  }
+
+  console.log(
+    `Waiting ${Math.ceil(milliseconds / 1000)} seconds until 12 AM in Doha before the first booking.`,
+  )
+  await page.waitForTimeout(milliseconds)
+
+  milliseconds = getMillisecondsUntilDohaMidnight()
+  if (milliseconds > 0) {
+    await page.waitForTimeout(milliseconds)
+  }
 }
 
 function getDateParts(value) {
@@ -205,9 +248,16 @@ test('Submit pending and failed future bookings', async ({ page }) => {
     bookingsToProcess.length === 0,
     'No Pending or Failed bookings to process',
   )
-  test.setTimeout(Math.max(30_000, bookingsToProcess.length * 60_000))
+  test.setTimeout(
+    Math.max(
+      30_000,
+      bookingsToProcess.length * 60_000,
+      25 * 60 * 60 * 1000,
+    ),
+  )
 
   let signedInUserName
+  let waitedForDohaMidnight = false
 
   for (const booking of bookingsToProcess) {
     try {
@@ -238,6 +288,12 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         await page.locator('#txtPassword').fill(password)
         await page.getByRole('button', { name: /log\s*in/i }).click()
         signedInUserName = normalizedUserName
+
+        if (!waitedForDohaMidnight) {
+          await waitUntilDohaMidnight(page)
+          waitedForDohaMidnight = true
+        }
+
         await page.goto(CHOOSE_LOCATION_URL)
       }
 
