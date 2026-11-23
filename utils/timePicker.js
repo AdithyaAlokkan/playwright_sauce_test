@@ -29,7 +29,12 @@ function parseTime(value) {
   return hours * 60 + minutes
 }
 
-async function selectTimeSlot(page, startTime, endTime) {
+async function selectTimeSlot(
+  page,
+  startTime,
+  endTime,
+  waitAfterAction = async () => {},
+) {
   const start = parseTime(startTime)
   const end = parseTime(endTime)
 
@@ -93,6 +98,7 @@ async function selectTimeSlot(page, startTime, endTime) {
 
   for (const { index, checkbox } of checkboxes) {
     await checkbox.check()
+    await waitAfterAction()
 
     if (!(await checkbox.isChecked())) {
       throw new Error(`Time slot ${index} was not selected`)

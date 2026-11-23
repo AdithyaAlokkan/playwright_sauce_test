@@ -6,9 +6,24 @@ const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
 const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
-const WAIT_UNTIL_DOHA_MIDNIGHT = true
+const WAIT_UNTIL_DOHA_MIDNIGHT = false
+const WAIT_AFTER_EACH_PLAYWRIGHT_ACTION = true
+const PLAYWRIGHT_ACTION_WAIT_MS = 5_000
 const WEEKLY_BOOKING_LIMIT_ERROR =
   'Sorry. You can only book 4 hours of play in one week (Saturday to Friday)'
+
+async function waitAfterPlaywrightAction(page) {
+  if (WAIT_AFTER_EACH_PLAYWRIGHT_ACTION) {
+    await page.waitForTimeout(PLAYWRIGHT_ACTION_WAIT_MS)
+  }
+}
+
+async function performPlaywrightAction(page, action) {
+  const result = await action()
+  await waitAfterPlaywrightAction(page)
+
+  return result
+}
 
 function getDohaDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -127,7 +142,7 @@ async function selectBookingDate(page, dateValue) {
   const { year, month, day } = getDateParts(dateValue)
   const dateInput = page.locator('#txtdate')
 
-  await page.locator('#img').click()
+  await performPlaywrightAction(page, () => page.locator('#img').click())
 
   const calendar = page.locator('#Calendar1')
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -161,10 +176,12 @@ async function selectBookingDate(page, dateValue) {
         throw new Error(`Date ${monthName} ${day}, ${year} is not selectable`)
       }
 
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-        dayLink.click(),
-      ])
+      await performPlaywrightAction(page, () =>
+        Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+          dayLink.click(),
+        ]),
+      )
 
       const selectedDate = await dateInput.inputValue()
       const expectedDate = formatBookingDate(dateValue)
@@ -194,10 +211,12 @@ async function selectBookingDate(page, dateValue) {
       )
     }
 
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-      monthLink.click(),
-    ])
+    await performPlaywrightAction(page, () =>
+      Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        monthLink.click(),
+      ]),
+    )
   }
 
   throw new Error(`Could not navigate the calendar to ${dateValue}`)
@@ -284,12 +303,20 @@ test('Submit pending and failed future bookings', async ({ page }) => {
 
       const normalizedUserName = userName.trim()
       if (signedInUserName === normalizedUserName) {
-        await page.goto(CHOOSE_LOCATION_URL)
+        await performPlaywrightAction(page, () =>
+          page.goto(CHOOSE_LOCATION_URL),
+        )
       } else {
-        await openBookingSignIn(page)
-        await page.locator('#txtQatarID').fill(normalizedUserName)
-        await page.locator('#txtPassword').fill(password)
-        await page.getByRole('button', { name: /log\s*in/i }).click()
+        await openBookingSignIn(page, () => waitAfterPlaywrightAction(page))
+        await performPlaywrightAction(page, () =>
+          page.locator('#txtQatarID').fill(normalizedUserName),
+        )
+        await performPlaywrightAction(page, () =>
+          page.locator('#txtPassword').fill(password),
+        )
+        await performPlaywrightAction(page, () =>
+          page.getByRole('button', { name: /log\s*in/i }).click(),
+        )
         signedInUserName = normalizedUserName
 
         if (!waitedForDohaMidnight) {
@@ -299,10 +326,14 @@ test('Submit pending and failed future bookings', async ({ page }) => {
           waitedForDohaMidnight = true
         }
 
-        await page.goto(CHOOSE_LOCATION_URL)
+        await performPlaywrightAction(page, () =>
+          page.goto(CHOOSE_LOCATION_URL),
+        )
       }
 
-      await page.getByRole('link', { name: /^Madinatna\b/i }).click()
+      await performPlaywrightAction(page, () =>
+        page.getByRole('link', { name: /^Madinatna\b/i }).click(),
+      )
 
       const sportPaths = {
         padel: 'MadinatnaPaddle.aspx',
@@ -323,7 +354,7 @@ test('Submit pending and failed future bookings', async ({ page }) => {
           { cause: error },
         )
       }
-      await sportLink.click()
+      await performPlaywrightAction(page, () => sportLink.click())
 
       const clusterLinks = page.locator(
         'a[href*="MadinatnaBookings.aspx"]',
@@ -385,7 +416,9 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         )
       }
 
-      await page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click()
+      await performPlaywrightAction(page, () =>
+        page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click(),
+      )
       const dateSelected = await selectBookingDate(page, booking.Date)
       if (!dateSelected) {
         await updateBookingStatus(
@@ -400,6 +433,7 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         page,
         booking.Time_Start,
         booking.Time_End,
+        () => waitAfterPlaywrightAction(page),
       )
       if (!timeSlotsSelected) {
         await updateBookingStatus(
@@ -410,10 +444,12 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         continue
       }
 
-      const [submitResponse] = await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-        page.locator('#btnSave').click(),
-      ])
+      const [submitResponse] = await performPlaywrightAction(page, () =>
+        Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+          page.locator('#btnSave').click(),
+        ]),
+      )
 
       if (!submitResponse?.ok()) {
         throw new Error(
