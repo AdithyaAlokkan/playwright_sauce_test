@@ -1,11 +1,6 @@
 name: Playwright Tests
 on:
   workflow_dispatch:
-    inputs:
-      booking_id:
-        description: 'Supabase booking ID'
-        required: false
-        type: string
 jobs:
   test:
     timeout-minutes: 60
