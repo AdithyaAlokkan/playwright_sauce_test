@@ -6,8 +6,8 @@ const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
 const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
-const WAIT_UNTIL_DOHA_MIDNIGHT = false
-const WAIT_AFTER_EACH_PLAYWRIGHT_ACTION = true
+const WAIT_UNTIL_DOHA_MIDNIGHT = true
+const WAIT_AFTER_EACH_PLAYWRIGHT_ACTION = false
 const PLAYWRIGHT_ACTION_WAIT_MS = 5_000
 const WEEKLY_BOOKING_LIMIT_ERROR =
   'Sorry. You can only book 4 hours of play in one week (Saturday to Friday)'
@@ -85,11 +85,7 @@ function getMillisecondsUntilDohaMidnight(date = new Date()) {
     now.second,
     date.getUTCMilliseconds(),
   )
-  const nextMidnight = Date.UTC(
-    now.year,
-    now.month - 1,
-    now.day + 1,
-  )
+  const nextMidnight = Date.UTC(now.year, now.month - 1, now.day + 1)
 
   return now.hour === 0 ? 0 : nextMidnight - nowAtMidnight
 }
@@ -261,8 +257,8 @@ function getBookingStart(dateValue, timeValue) {
 
 test('Submit pending and failed future bookings', async ({ page }) => {
   const bookings = await getBookings()
-  const bookingsToProcess = bookings.filter(
-    (booking) => ['Pending', 'Failed'].includes(booking.Status),
+  const bookingsToProcess = bookings.filter((booking) =>
+    ['Pending', 'Failed'].includes(booking.Status),
   )
   const now = getCurrentDohaTime()
 
@@ -271,11 +267,7 @@ test('Submit pending and failed future bookings', async ({ page }) => {
     'No Pending or Failed bookings to process',
   )
   test.setTimeout(
-    Math.max(
-      30_000,
-      bookingsToProcess.length * 60_000,
-      25 * 60 * 60 * 1000,
-    ),
+    Math.max(30_000, bookingsToProcess.length * 60_000, 25 * 60 * 60 * 1000),
   )
 
   let signedInUserName
@@ -356,9 +348,7 @@ test('Submit pending and failed future bookings', async ({ page }) => {
       }
       await performPlaywrightAction(page, () => sportLink.click())
 
-      const clusterLinks = page.locator(
-        'a[href*="MadinatnaBookings.aspx"]',
-      )
+      const clusterLinks = page.locator('a[href*="MadinatnaBookings.aspx"]')
       const needsCourt =
         booking.Cluster.trim().toLowerCase() === 'i' &&
         ['paddle', 'padel'].includes(booking.Sport.trim().toLowerCase())
@@ -380,7 +370,10 @@ test('Submit pending and failed future bookings', async ({ page }) => {
 
       const clusterHref = await clusterLinks.evaluateAll(
         (links, expected) => {
-          const normalize = (value) => String(value ?? '').trim().toLowerCase()
+          const normalize = (value) =>
+            String(value ?? '')
+              .trim()
+              .toLowerCase()
           const expectedCluster = normalize(expected.cluster)
           const expectedSport =
             normalize(expected.sport) === 'padel'
@@ -388,19 +381,21 @@ test('Submit pending and failed future bookings', async ({ page }) => {
               : normalize(expected.sport)
 
           return (
-            links.find((link) => {
-              const url = new URL(link.href)
-              const linkSport = normalize(url.searchParams.get('Sport'))
-              const linkSports = linkSport.split(/\s+with\s+/)
-              return (
-                normalize(url.searchParams.get('Cluster')) ===
-                  expectedCluster &&
-                (linkSport === expectedSport ||
-                  linkSports.includes(expectedSport)) &&
-                (!expected.courtNo ||
-                  url.searchParams.get('CourtNo') === expected.courtNo)
-              )
-            })?.getAttribute('href') ?? null
+            links
+              .find((link) => {
+                const url = new URL(link.href)
+                const linkSport = normalize(url.searchParams.get('Sport'))
+                const linkSports = linkSport.split(/\s+with\s+/)
+                return (
+                  normalize(url.searchParams.get('Cluster')) ===
+                    expectedCluster &&
+                  (linkSport === expectedSport ||
+                    linkSports.includes(expectedSport)) &&
+                  (!expected.courtNo ||
+                    url.searchParams.get('CourtNo') === expected.courtNo)
+                )
+              })
+              ?.getAttribute('href') ?? null
           )
         },
         {
