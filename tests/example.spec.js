@@ -6,8 +6,24 @@ const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
 const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
+const WAIT_UNTIL_DOHA_MIDNIGHT = false
+const WAIT_AFTER_EACH_PLAYWRIGHT_ACTION = false
+const PLAYWRIGHT_ACTION_WAIT_MS = 5_000
 const WEEKLY_BOOKING_LIMIT_ERROR =
   'Sorry. You can only book 4 hours of play in one week (Saturday to Friday)'
+
+async function waitAfterPlaywrightAction(page) {
+  if (WAIT_AFTER_EACH_PLAYWRIGHT_ACTION) {
+    await page.waitForTimeout(PLAYWRIGHT_ACTION_WAIT_MS)
+  }
+}
+
+async function performPlaywrightAction(page, action) {
+  const result = await action()
+  await waitAfterPlaywrightAction(page)
+
+  return result
+}
 
 function getDohaDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -26,21 +42,7 @@ function getDohaDateParts(date) {
 
 function getCurrentDohaTime() {
   const now = new Date()
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: BOOKING_TIME_ZONE,
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    hourCycle: 'h23',
-  }).formatToParts(now)
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, Number(part.value)]),
-  )
+  const values = getDohaTimeParts(now)
 
   return Date.UTC(
     values.year,
@@ -51,6 +53,59 @@ function getCurrentDohaTime() {
     values.second,
     now.getUTCMilliseconds(),
   )
+}
+
+function getDohaTimeParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BOOKING_TIME_ZONE,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+
+  return Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  )
+}
+
+function getMillisecondsUntilDohaMidnight(date = new Date()) {
+  const now = getDohaTimeParts(date)
+  const nowAtMidnight = Date.UTC(
+    now.year,
+    now.month - 1,
+    now.day,
+    now.hour,
+    now.minute,
+    now.second,
+    date.getUTCMilliseconds(),
+  )
+  const nextMidnight = Date.UTC(now.year, now.month - 1, now.day + 1)
+
+  return now.hour === 0 ? 0 : nextMidnight - nowAtMidnight
+}
+
+async function waitUntilDohaMidnight(page) {
+  let milliseconds = getMillisecondsUntilDohaMidnight()
+
+  if (milliseconds <= 0) {
+    return
+  }
+
+  console.log(
+    `Waiting ${Math.ceil(milliseconds / 1000)} seconds until 12 AM in Doha before the first booking.`,
+  )
+  await page.waitForTimeout(milliseconds)
+
+  milliseconds = getMillisecondsUntilDohaMidnight()
+  if (milliseconds > 0) {
+    await page.waitForTimeout(milliseconds)
+  }
 }
 
 function getDateParts(value) {
@@ -83,7 +138,7 @@ async function selectBookingDate(page, dateValue) {
   const { year, month, day } = getDateParts(dateValue)
   const dateInput = page.locator('#txtdate')
 
-  await page.locator('#img').click()
+  await performPlaywrightAction(page, () => page.locator('#img').click())
 
   const calendar = page.locator('#Calendar1')
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -117,10 +172,12 @@ async function selectBookingDate(page, dateValue) {
         throw new Error(`Date ${monthName} ${day}, ${year} is not selectable`)
       }
 
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-        dayLink.click(),
-      ])
+      await performPlaywrightAction(page, () =>
+        Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+          dayLink.click(),
+        ]),
+      )
 
       const selectedDate = await dateInput.inputValue()
       const expectedDate = formatBookingDate(dateValue)
@@ -150,10 +207,12 @@ async function selectBookingDate(page, dateValue) {
       )
     }
 
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-      monthLink.click(),
-    ])
+    await performPlaywrightAction(page, () =>
+      Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        monthLink.click(),
+      ]),
+    )
   }
 
   throw new Error(`Could not navigate the calendar to ${dateValue}`)
@@ -198,8 +257,8 @@ function getBookingStart(dateValue, timeValue) {
 
 test('Submit pending and failed future bookings', async ({ page }) => {
   const bookings = await getBookings()
-  const bookingsToProcess = bookings.filter(
-    (booking) => ['Pending', 'Failed'].includes(booking.Status),
+  const bookingsToProcess = bookings.filter((booking) =>
+    ['Pending', 'Failed'].includes(booking.Status),
   )
   const now = getCurrentDohaTime()
 
@@ -207,9 +266,12 @@ test('Submit pending and failed future bookings', async ({ page }) => {
     bookingsToProcess.length === 0,
     'No Pending or Failed bookings to process',
   )
-  test.setTimeout(Math.max(30_000, bookingsToProcess.length * 60_000))
+  test.setTimeout(
+    Math.max(30_000, bookingsToProcess.length * 60_000, 25 * 60 * 60 * 1000),
+  )
 
   let signedInUserName
+  let waitedForDohaMidnight = false
 
   for (const booking of bookingsToProcess) {
     try {
@@ -233,17 +295,37 @@ test('Submit pending and failed future bookings', async ({ page }) => {
 
       const normalizedUserName = userName.trim()
       if (signedInUserName === normalizedUserName) {
-        await page.goto(CHOOSE_LOCATION_URL)
+        await performPlaywrightAction(page, () =>
+          page.goto(CHOOSE_LOCATION_URL),
+        )
       } else {
-        await openBookingSignIn(page)
-        await page.locator('#txtQatarID').fill(normalizedUserName)
-        await page.locator('#txtPassword').fill(password)
-        await page.getByRole('button', { name: /log\s*in/i }).click()
+        await openBookingSignIn(page, () => waitAfterPlaywrightAction(page))
+        await performPlaywrightAction(page, () =>
+          page.locator('#txtQatarID').fill(normalizedUserName),
+        )
+        await performPlaywrightAction(page, () =>
+          page.locator('#txtPassword').fill(password),
+        )
+        await performPlaywrightAction(page, () =>
+          page.getByRole('button', { name: /log\s*in/i }).click(),
+        )
         signedInUserName = normalizedUserName
-        await page.goto(CHOOSE_LOCATION_URL)
+
+        if (!waitedForDohaMidnight) {
+          if (WAIT_UNTIL_DOHA_MIDNIGHT) {
+            await waitUntilDohaMidnight(page)
+          }
+          waitedForDohaMidnight = true
+        }
+
+        await performPlaywrightAction(page, () =>
+          page.goto(CHOOSE_LOCATION_URL),
+        )
       }
 
-      await page.getByRole('link', { name: /^Madinatna\b/i }).click()
+      await performPlaywrightAction(page, () =>
+        page.getByRole('link', { name: /^Madinatna\b/i }).click(),
+      )
 
       const sportPaths = {
         padel: 'MadinatnaPaddle.aspx',
@@ -264,11 +346,9 @@ test('Submit pending and failed future bookings', async ({ page }) => {
           { cause: error },
         )
       }
-      await sportLink.click()
+      await performPlaywrightAction(page, () => sportLink.click())
 
-      const clusterLinks = page.locator(
-        'a[href*="MadinatnaBookings.aspx"]',
-      )
+      const clusterLinks = page.locator('a[href*="MadinatnaBookings.aspx"]')
       const needsCourt =
         booking.Cluster.trim().toLowerCase() === 'i' &&
         ['paddle', 'padel'].includes(booking.Sport.trim().toLowerCase())
@@ -290,7 +370,10 @@ test('Submit pending and failed future bookings', async ({ page }) => {
 
       const clusterHref = await clusterLinks.evaluateAll(
         (links, expected) => {
-          const normalize = (value) => String(value ?? '').trim().toLowerCase()
+          const normalize = (value) =>
+            String(value ?? '')
+              .trim()
+              .toLowerCase()
           const expectedCluster = normalize(expected.cluster)
           const expectedSport =
             normalize(expected.sport) === 'padel'
@@ -298,19 +381,21 @@ test('Submit pending and failed future bookings', async ({ page }) => {
               : normalize(expected.sport)
 
           return (
-            links.find((link) => {
-              const url = new URL(link.href)
-              const linkSport = normalize(url.searchParams.get('Sport'))
-              const linkSports = linkSport.split(/\s+with\s+/)
-              return (
-                normalize(url.searchParams.get('Cluster')) ===
-                  expectedCluster &&
-                (linkSport === expectedSport ||
-                  linkSports.includes(expectedSport)) &&
-                (!expected.courtNo ||
-                  url.searchParams.get('CourtNo') === expected.courtNo)
-              )
-            })?.getAttribute('href') ?? null
+            links
+              .find((link) => {
+                const url = new URL(link.href)
+                const linkSport = normalize(url.searchParams.get('Sport'))
+                const linkSports = linkSport.split(/\s+with\s+/)
+                return (
+                  normalize(url.searchParams.get('Cluster')) ===
+                    expectedCluster &&
+                  (linkSport === expectedSport ||
+                    linkSports.includes(expectedSport)) &&
+                  (!expected.courtNo ||
+                    url.searchParams.get('CourtNo') === expected.courtNo)
+                )
+              })
+              ?.getAttribute('href') ?? null
           )
         },
         {
@@ -326,7 +411,9 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         )
       }
 
-      await page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click()
+      await performPlaywrightAction(page, () =>
+        page.locator(`a[href=${JSON.stringify(clusterHref)}]`).click(),
+      )
       const dateSelected = await selectBookingDate(page, booking.Date)
       if (!dateSelected) {
         await updateBookingStatus(
@@ -341,6 +428,7 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         page,
         booking.Time_Start,
         booking.Time_End,
+        () => waitAfterPlaywrightAction(page),
       )
       if (!timeSlotsSelected) {
         await updateBookingStatus(
@@ -351,10 +439,12 @@ test('Submit pending and failed future bookings', async ({ page }) => {
         continue
       }
 
-      const [submitResponse] = await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-        page.locator('#btnSave').click(),
-      ])
+      const [submitResponse] = await performPlaywrightAction(page, () =>
+        Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+          page.locator('#btnSave').click(),
+        ]),
+      )
 
       if (!submitResponse?.ok()) {
         throw new Error(
