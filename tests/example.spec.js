@@ -6,7 +6,7 @@ const { selectTimeSlot } = require('../utils/timePicker')
 
 const BOOKING_TIME_ZONE = 'Asia/Qatar'
 const CHOOSE_LOCATION_URL = 'https://pdcb.waseef.qa/ChooseLocation'
-const WAIT_UNTIL_DOHA_MIDNIGHT = true
+const WAIT_UNTIL_DOHA_MIDNIGHT = false
 const WAIT_AFTER_EACH_PLAYWRIGHT_ACTION = false
 const PLAYWRIGHT_ACTION_WAIT_MS = 5_000
 const WEEKLY_BOOKING_LIMIT_ERROR =
